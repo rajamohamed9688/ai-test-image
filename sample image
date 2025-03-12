@@ -130,3 +130,16 @@ html_content = '''
 
 with open('templates/index.html', 'w') as file:
     file.write(html_content)
+
+
+# requirements.txt
+requirements = '''
+Flask
+torch
+transformers
+Pillow
+diffusers
+'''
+
+with open('requirements.txt', 'w') as f:
+    f.write(requirements)
