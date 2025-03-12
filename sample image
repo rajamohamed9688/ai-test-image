@@ -1,0 +1,132 @@
+from flask import Flask, request, render_template, send_file
+import torch
+from PIL import Image
+from diffusers import StableDiffusionControlNetPipeline, ControlNetModel
+from torchvision import transforms
+import os
+
+app = Flask(__name__)
+app.config['UPLOAD_FOLDER'] = '/mnt/data/uploads'
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+
+def load_image(image_path):
+    image = Image.open(image_path)
+    preprocess = transforms.Compose([
+        transforms.Resize((512, 512)),
+        transforms.ToTensor(),
+    ])
+    return preprocess(image).unsqueeze(0)
+
+def generate_images(model, controlnet, input_image, prompts):
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model.to(device)
+    controlnet.to(device)
+
+    input_image = input_image.to(device)
+    generated_images = {}
+
+    with torch.no_grad():
+        for angle, prompt in prompts.items():
+            generated_image = model(input_image, prompt)
+            generated_images[angle] = generated_image
+
+    return generated_images
+
+def save_image(tensor_image, save_path):
+    image = transforms.ToPILImage()(tensor_image.squeeze(0))
+    image.save(save_path)
+
+
+# Load your pre-trained ControlNet and Model
+controlnet = ControlNetModel.from_pretrained('path_to_controlnet')
+model = StableDiffusionControlNetPipeline.from_pretrained('path_to_model', controlnet=controlnet)
+
+
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    if request.method == 'POST':
+        if 'file' not in request.files:
+            return 'No file uploaded', 400
+
+        file = request.files['file']
+        if file.filename == '':
+            return 'No selected file', 400
+
+        if file:
+            image_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
+            file.save(image_path)
+
+            # Load and process the image
+            input_image = load_image(image_path)
+
+            # Prompts for different angles
+            prompts = {
+                'front': 'A realistic model wearing a kurti with the same pattern and design, front view, highly detailed, ultra-realistic.',
+                'side': 'A realistic model wearing a kurti with the same pattern and design, side view, highly detailed, ultra-realistic.',
+                'back': 'A realistic model wearing a kurti with the same pattern and design, back view, highly detailed, ultra-realistic.'
+            }
+
+            # Generate images
+            generated_images = generate_images(model, controlnet, input_image, prompts)
+
+            # Save generated images and provide download links
+            result_paths = {}
+            for angle, image in generated_images.items():
+                save_path = f'/mnt/data/generated_kurti_{angle}.png'
+                save_image(image, save_path)
+                result_paths[angle] = save_path
+
+            return render_template('index.html', result_paths=result_paths)
+
+    return render_template('index.html')
+
+
+@app.route('/download/<angle>')
+def download(angle):
+    file_path = f'/mnt/data/generated_kurti_{angle}.png'
+    if os.path.exists(file_path):
+        return send_file(file_path, as_attachment=True)
+    else:
+        return 'File not found', 404
+
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
+
+
+# index.html
+html_content = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Kurti Image Generation</title>
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+        input[type="file"] { margin-bottom: 20px; }
+        img { width: 300px; margin: 10px; border: 2px solid #ddd; border-radius: 8px; }
+    </style>
+</head>
+<body>
+    <h1>Upload Kurti Image</h1>
+    <form method="POST" enctype="multipart/form-data">
+        <input type="file" name="file" accept="image/*" required><br><br>
+        <input type="submit" value="Generate Images">
+    </form>
+
+    {% if result_paths %}
+        <h2>Generated Images</h2>
+        {% for angle, path in result_paths.items() %}
+            <div>
+                <h3>{{ angle.capitalize() }} View</h3>
+                <img src="{{ url_for('download', angle=angle) }}" alt="{{ angle }} view"><br>
+                <a href="{{ url_for('download', angle=angle) }}">Download {{ angle }} view</a>
+            </div>
+        {% endfor %}
+    {% endif %}
+</body>
+</html>
+'''
+
+with open('templates/index.html', 'w') as file:
+    file.write(html_content)
